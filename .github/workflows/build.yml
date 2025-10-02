@@ -9,7 +9,7 @@ on:
         value: ${{ jobs.build.outputs.version }}
 
 jobs:
-  build:
+  extract-version:
     runs-on: ubuntu-22.04
     outputs:
       version: ${{ steps.extract_version.outputs.version }}
@@ -24,6 +24,22 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Building version: ${VERSION}"
 
+  build:
+    needs: extract-version
+    runs-on: ${{ matrix.runner }}
+    outputs:
+      version: ${{ needs.extract-version.outputs.version }}
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-22.04
+          - arch: arm64
+            runner: ubuntu-22.04-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Configure CMake (GCC 12)
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=Release \
@@ -36,10 +52,10 @@ jobs:
       - name: Build Debian package
         run: |
           cp build/rmp-eval .
-          ./packaging/build_deb.sh ${{ steps.extract_version.outputs.version }}
+          ./packaging/build_deb.sh ${{ needs.extract-version.outputs.version }}
 
       - name: Upload package artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rmp-eval-package
-          path: rmp-eval_${{ steps.extract_version.outputs.version }}_amd64.deb
+          name: rmp-eval-package-${{ matrix.arch }}
+          path: rmp-eval_${{ needs.extract-version.outputs.version }}_${{ matrix.arch }}.deb
