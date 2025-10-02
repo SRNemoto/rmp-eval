@@ -10,12 +10,19 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-22.04-arm
     steps:
       - name: Download package artifact
         uses: actions/download-artifact@v4
         with:
-          name: rmp-eval-package
+          name: rmp-eval-package-${{ matrix.arch }}
           path: .
 
       - name: Install package
