@@ -1,0 +1,53 @@
+name: Test
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "The version to test against"
+        type: string
+        required: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download package artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rmp-eval-package
+          path: .
+
+      - name: Install package
+        run: |
+          sudo dpkg -i rmp-eval_*.deb
+
+      - name: Test installed binary
+        run: |
+          set -euo pipefail
+
+          # Verify binary is in expected location
+          echo "Binary location:"
+          which rmp-eval
+
+          # Test version output matches expected version
+          EXPECTED_VERSION="${{ inputs.version }}"
+          echo "Testing version output..."
+          ACTUAL_VERSION=$(rmp-eval --version 2>/dev/null | head -1)
+
+          echo "Expected version: ${EXPECTED_VERSION}"
+          echo "Actual version: ${ACTUAL_VERSION}"
+
+          if [ "${ACTUAL_VERSION}" != "${EXPECTED_VERSION}" ]; then
+            echo "::error::Version mismatch! Expected ${EXPECTED_VERSION} but got ${ACTUAL_VERSION}"
+            exit 1
+          fi
+
+          # Test help output
+          echo "Testing help output..."
+          if ! rmp-eval --help 2>/dev/null | grep -q 'Network interface card name'; then
+            echo "::error::Help output doesn't contain expected text"
+            exit 1
+          fi
+
+          echo "All tests passed!"

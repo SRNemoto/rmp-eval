@@ -1,0 +1,4 @@
+# Ignore build artifacts
+rmp-eval
+build/
+*.deb

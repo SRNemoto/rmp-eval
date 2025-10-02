@@ -1,0 +1,21 @@
+name: Lint
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate compile_commands.json
+        run: |
+          mkdir -p build
+          cd build
+          cmake .. -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+      - name: Lint (clang-tidy)
+        run: run-clang-tidy -p build -warnings-as-errors='*'

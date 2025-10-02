@@ -1,0 +1,93 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check-version:
+    name: Check Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.extract_version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract version from version.h
+        id: extract_version
+        run: |
+          VERSION=$(./scripts/get_version.sh)
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Checking version: ${VERSION}"
+
+      - name: Check for existing release or tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ steps.extract_version.outputs.version }}"
+
+          # Check for existing release
+          if gh release view "${VERSION}" >/dev/null 2>&1; then
+            echo "::error::Release ${VERSION} already exists. Please bump the version in include/version.h before creating a new release."
+            exit 1
+          fi
+
+          # Check for existing tag using GitHub API
+          if gh api "repos/${{ github.repository }}/git/refs/tags/${VERSION}" >/dev/null 2>&1; then
+            echo "::error::Tag ${VERSION} already exists. This likely means a release was attempted but failed. Please either delete the tag or bump the version in include/version.h."
+            exit 1
+          fi
+
+          echo "::notice title=Version Check::Version ${VERSION} is available for release (no existing release or tag). Proceeding with build..."
+
+  ci:
+    needs: check-version
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    name: Release ${{ needs.ci.outputs.version }}
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      # NOTE: We need to checkout the repo here even though we don't need the source code.
+      # This is because 'gh release create' requires git context to determine the repository.
+      # Ideally, we should use the --repo flag instead, but this checkout ensures compatibility.
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download package artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rmp-eval-package
+          path: .
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ needs.ci.outputs.version }}"
+
+          # Create release with the package
+          gh release create "${VERSION}" \
+            --title "${VERSION}" \
+            --generate-notes \
+            rmp-eval_${VERSION}_amd64.deb
+
+          echo "::notice title=Release Complete::Successfully released version ${VERSION}"
+
+      - name: Create Job Summary
+        run: |
+          VERSION="${{ needs.ci.outputs.version }}"
+          echo "## 📦 Released Version ${VERSION}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Release Details" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: ${VERSION}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Package**: rmp-eval_${VERSION}_amd64.deb" >> $GITHUB_STEP_SUMMARY
+          echo "- **Release URL**: https://github.com/${{ github.repository }}/releases/tag/${VERSION}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "1. Bump version in \`include/version.h\` for next development cycle" >> $GITHUB_STEP_SUMMARY
+          echo "2. Continue development" >> $GITHUB_STEP_SUMMARY

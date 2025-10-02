@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    outputs:
+      version:
+        description: "The version string from build"
+        value: ${{ jobs.build.outputs.version }}
+
+jobs:
+  lint:
+    uses: ./.github/workflows/lint.yml
+  build:
+    uses: ./.github/workflows/build.yml
+  
+
+  test:
+    needs: build
+    uses: ./.github/workflows/test.yml
+    with:
+      version: ${{ needs.build.outputs.version }}

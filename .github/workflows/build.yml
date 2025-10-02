@@ -1,0 +1,45 @@
+name: Build
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    outputs:
+      version:
+        description: "The version string extracted from version.h"
+        value: ${{ jobs.build.outputs.version }}
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.extract_version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract version from version.h
+        id: extract_version
+        run: |
+          VERSION=$(./scripts/get_version.sh)
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Building version: ${VERSION}"
+
+      - name: Configure CMake (GCC 12)
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_C_COMPILER=gcc-12 \
+                -DCMAKE_CXX_COMPILER=g++-12
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Build Debian package
+        run: |
+          cp build/rmp-eval .
+          ./packaging/build_deb.sh ${{ steps.extract_version.outputs.version }}
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rmp-eval-package
+          path: rmp-eval_${{ steps.extract_version.outputs.version }}_amd64.deb
