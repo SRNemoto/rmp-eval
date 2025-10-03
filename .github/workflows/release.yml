@@ -58,10 +58,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download package artifact
+      - name: Download amd64 package artifact
         uses: actions/download-artifact@v4
         with:
-          name: rmp-eval-package
+          name: rmp-eval-package-amd64
+          path: .
+
+      - name: Download arm64 package artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rmp-eval-package-arm64
           path: .
 
       - name: Create GitHub Release
@@ -70,13 +76,14 @@ jobs:
         run: |
           VERSION="${{ needs.ci.outputs.version }}"
 
-          # Create release with the package
+          # Create release with both packages
           gh release create "${VERSION}" \
             --title "${VERSION}" \
             --generate-notes \
-            rmp-eval_${VERSION}_amd64.deb
+            rmp-eval_${VERSION}_amd64.deb \
+            rmp-eval_${VERSION}_arm64.deb
 
-          echo "::notice title=Release Complete::Successfully released version ${VERSION}"
+          echo "::notice title=Release Complete::Successfully released version ${VERSION} for amd64 and arm64"
 
       - name: Create Job Summary
         run: |
@@ -85,7 +92,9 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Release Details" >> $GITHUB_STEP_SUMMARY
           echo "- **Version**: ${VERSION}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Package**: rmp-eval_${VERSION}_amd64.deb" >> $GITHUB_STEP_SUMMARY
+          echo "- **Packages**:" >> $GITHUB_STEP_SUMMARY
+          echo "  - rmp-eval_${VERSION}_amd64.deb" >> $GITHUB_STEP_SUMMARY
+          echo "  - rmp-eval_${VERSION}_arm64.deb" >> $GITHUB_STEP_SUMMARY
           echo "- **Release URL**: https://github.com/${{ github.repository }}/releases/tag/${VERSION}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
