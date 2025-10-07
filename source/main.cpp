@@ -302,19 +302,27 @@ void PrintReport(ReportVector& reports, int& lineCount, Evaluator::TableMaker& t
   std::chrono::steady_clock::time_point startTime, std::chrono::steady_clock::time_point endTime,
   std::ostream& stream)
 {
-  stream << "\033[" << lineCount << "A"; // Move cursor up to overwrite the report
+  // Recalculate column widths based on actual data
+  tableMaker.OptimizeColumnWidthsFromData(reports);
+
+  // Move cursor up and clear from cursor to end of screen
+  if (lineCount > 0)
+  {
+    stream << "\033[" << lineCount << "A"; // Move cursor up
+    stream << "\033[J"; // Clear from cursor to end of screen
+  }
   lineCount = 0;
-  stream << "\n";
-  lineCount += 1;
+
+  // Reprint header with updated widths
+  lineCount += tableMaker.PrintLabels(stream);
+
   std::stringstream summary;
   for (auto [label, dataPtr] : reports)
   {
     if (dataPtr != nullptr)
     {
       lineCount += tableMaker.PrintRow(label, *dataPtr, stream);
-      summary << std::setw(Evaluator::TableMaker::RowLabelWidth) << label
-        << " max total: " << static_cast<uint64_t>(dataPtr->max / NanoPerMicro)
-        << " us at index " << dataPtr->maxIndex << "\n";
+      tableMaker.PrintMaxLatencySummary(summary, label, *dataPtr);
       lineCount += 1;
     }
   }
@@ -438,21 +446,25 @@ int main(int argc, char* argv[])
 
     Evaluator::TableMaker tableMaker = Evaluator::TableMaker::CreateTableMaker(params.BucketWidth, params.IsVerbose);
 
-    std::cout << "Estimated run time: " << Evaluator::GetEstimatedRunTime(params.Iterations, params.SendSleep) << "\n";
+    if (params.Iterations != Evaluator::RunIndefinitely)
+    {
+      std::cout << "Estimated run time: " << Evaluator::GetEstimatedRunTime(params.Iterations, params.SendSleep) << "\n";
+    }
     std::cout << "Target period: " << static_cast<int>(params.SendSleep / Evaluator::NanoPerMicro) << " us\n\n" << std::flush;
 
     // Evaluator::DurationReporter durationReporter("Total test duration");
-    
-    tableMaker.PrintLabels(std::cout);
-    
+
     int lineCount = 0;
     Evaluator::ReportVector reports;
-    
+
     auto startTime = std::chrono::steady_clock::now();
 
     if (params.NicName == NoNicSelected)
     {
       reports.push_back({"Cyclic", &sendData});
+
+      tableMaker.OptimizeRowLabelWidth(reports);
+
       std::thread cyclicThread(Evaluator::SenderThread, params, nullptr);
 
       std::thread reportThread(Evaluator::ReportThread, std::ref(reports), std::ref(lineCount), std::ref(tableMaker),
@@ -469,9 +481,12 @@ int main(int argc, char* argv[])
       reports.push_back({"Receiver", &receiveData});
       if (params.IsVerbose)
       {
-        reports.push_back({"Hardware Delta", &hardwareData});
-        reports.push_back({"Software Delta", &softwareData});
+        reports.push_back({"HW delta", &hardwareData});
+        reports.push_back({"SW delta", &softwareData});
       }
+
+      tableMaker.OptimizeRowLabelWidth(reports);
+
       std::shared_ptr<Evaluator::INicTest> tester = std::make_shared<Evaluator::EthercatNicTest>(params, 
         Evaluator::TimerReport(params.SendSleep, params.BucketWidth, &hardwareData),
         Evaluator::TimerReport(params.SendSleep, params.BucketWidth, &softwareData));

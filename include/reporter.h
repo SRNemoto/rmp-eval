@@ -21,6 +21,33 @@ namespace Evaluator
   inline constexpr uint64_t NanoPerSec = 1e9;
   inline constexpr size_t BucketCount = 5; // 5 buckets
 
+  struct BucketColorScheme
+  {
+    static inline constexpr char boldRed[] = "\033[38;5;196m";
+    static inline constexpr char red[] = "\033[31m";
+    static inline constexpr char orange[] = "\033[38;5;208m";
+    static inline constexpr char yellow[] = "\033[38;5;106m";
+    static inline constexpr char green[] = "\033[32m";
+    static inline constexpr char resetColor[] = "\033[0m";
+    static inline constexpr const char* colors[] = { green, yellow, orange, red, boldRed };
+    static inline constexpr const char* categories[] = { "Great", "Good", "Poor", "Bad", "Pathetic" };
+
+    static const char* GetColor(size_t bucketIndex)
+    {
+      return bucketIndex < BucketCount ? colors[bucketIndex] : resetColor;
+    }
+
+    static const char* GetCategory(size_t bucketIndex)
+    {
+      return bucketIndex < BucketCount ? categories[bucketIndex] : "Unknown";
+    }
+
+    static const char* GetResetColor()
+    {
+      return resetColor;
+    }
+  };
+
   struct ReportData
   {
     uint64_t min = std::numeric_limits<uint64_t>::max();
@@ -46,6 +73,7 @@ namespace Evaluator
   struct TableColumn
   {
     std::string Label;
+    std::string Category; // Category label for grouped headers (e.g., "Good", "Acceptable")
     static constexpr int DefaultColumnWidth = 10;
     static constexpr int PrintPrecision = 0;
     int Width = DefaultColumnWidth;
@@ -58,7 +86,8 @@ namespace Evaluator
 
     TableColumn(const std::string_view label, int width,
       ValueGetterType valueGetter,
-      ValueFormatterType valueFormatter = DefaultFormatter);
+      ValueFormatterType valueFormatter = DefaultFormatter,
+      const std::string_view category = "");
 
     void PrintLabel(std::ostream& stream) const;
     void PrintValue(ReportData& data, std::ostream& stream) const;
@@ -71,15 +100,24 @@ namespace Evaluator
     static constexpr char Separator[] = " | ";
     static constexpr char Dash = '-';
     static constexpr char DashJoint = '+';
-    static constexpr size_t RowLabelWidth = 16;
+    static constexpr int DefaultRowLabelWidth = 8;
     static TableMaker CreateTableMaker(uint64_t bucketWidth, bool isVerbose = false);
     TableMaker();
     void AddColumn(TableColumn&& column);
+    void OptimizeColumnWidths();
+    void OptimizeColumnWidthsFromData(const std::vector<std::pair<std::string_view, ReportData*>>& reports);
+    void OptimizeRowLabelWidth(const std::vector<std::pair<std::string_view, ReportData*>>& reports);
+    int GetRowLabelWidth() const { return rowLabelWidth; }
     int PrintLabels(std::ostream& stream) const;
     int PrintRow(std::string_view rowLabel, ReportData& data, std::ostream& stream) const;
+    void PrintMaxLatencySummary(std::ostream& stream, std::string_view label, const ReportData& data) const;
   private:
     std::vector<TableColumn> columns;
+    int rowLabelWidth = DefaultRowLabelWidth;
+    uint64_t bucketWidth = 0;
+    void OptimizeColumnWidthsForCategories();
     static int AddNewLine(std::ostream& stream, int count);
+    static int GetDigitCount(uint64_t value);
   };
 
   class TimerReport
