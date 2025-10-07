@@ -80,8 +80,10 @@ namespace Evaluator
   }
 
   TableColumn::TableColumn(const std::string_view argLabel, int argWidth,
-    ValueGetterType argValueGetter, ValueFormatterType argValueFormatter)
+    ValueGetterType argValueGetter, ValueFormatterType argValueFormatter,
+    const std::string_view argCategory)
     : Label(argLabel)
+    , Category(argCategory)
     , Width(argWidth)
     , ValueGetter(argValueGetter)
     , ValueFormatter(argValueFormatter)
@@ -114,8 +116,8 @@ namespace Evaluator
   TableMaker TableMaker::CreateTableMaker(uint64_t bucketWidth, bool isVerbose)
   {
     TableMaker tableMaker;
-    static constexpr int WideColumnWidth = TableColumn::DefaultColumnWidth * 1.5;
-    tableMaker.AddColumn(TableColumn{ "Count", WideColumnWidth, [](ReportData& data){ return data.observations; } });
+    tableMaker.bucketWidth = bucketWidth;
+    tableMaker.AddColumn(TableColumn{ "Count", TableColumn::DefaultColumnWidth, [](ReportData& data){ return data.observations; } });
     if (isVerbose)
     {
       tableMaker.AddColumn(TableColumn{ "Min", TableColumn::DefaultColumnWidth,
@@ -147,24 +149,12 @@ namespace Evaluator
     // Add buckets
     static constexpr auto lastBucket = BucketCount - 1UL;
     static constexpr size_t bufferSize = 32;
-    static constexpr char boldRed[] = "\033[38;5;196m";     // red
-    static constexpr char red[] = "\033[31m";     // red
-    static constexpr char orange[] = "\033[38;5;208m";  // orange
-    static constexpr char yellow[] = "\033[38;5;106m";  // yellow-green
-    static constexpr char green[] = "\033[32m";   // green
-    static constexpr char resetColor[] = "\033[0m";    // reset
-    static constexpr const char* colors[] = { green, yellow, orange, red, boldRed }; // green, yellow, orange, red, red
     for (size_t index = 0; index < lastBucket; ++index)
     {
       double label = std::round(bucketWidth * std::pow(2, index)) * NanoToMicro;
       char buffer[bufferSize] = {};
       std::snprintf(buffer, bufferSize, "< %.0fus", label);
-      int columnWidth = TableColumn::DefaultColumnWidth;
-      if (index == 0)
-      {
-        columnWidth = WideColumnWidth;
-      }
-      tableMaker.AddColumn(TableColumn{ buffer, columnWidth,
+      tableMaker.AddColumn(TableColumn{ buffer, TableColumn::DefaultColumnWidth,
         [index](ReportData& data) { return data.buckets[index]; },
         [index](std::ostream& stream, uint64_t value, int width)
         {
@@ -174,11 +164,12 @@ namespace Evaluator
           }
           else
           {
-            stream << colors[index]; // color
+            stream << BucketColorScheme::GetColor(index);
             TableColumn::DefaultFormatter(stream, value, width);
-            stream << resetColor; // reset color
+            stream << BucketColorScheme::GetResetColor();
           }
-        }
+        },
+        BucketColorScheme::GetCategory(index)
       });
     }
     // Add a special label for the last bucket
@@ -195,14 +186,15 @@ namespace Evaluator
         }
         else
         {
-          stream << colors[lastBucket]; // color
+          stream << BucketColorScheme::GetColor(lastBucket);
           TableColumn::DefaultFormatter(stream, value, width);
-          stream << resetColor; // reset color
+          stream << BucketColorScheme::GetResetColor();
         }
-      }
+      },
+      BucketColorScheme::GetCategory(lastBucket)
     });
 
-    tableMaker.AddColumn(TableColumn{ "Max us", TableColumn::DefaultColumnWidth,
+    tableMaker.AddColumn(TableColumn{ "us", TableColumn::DefaultColumnWidth,
       [](ReportData& data)
       {
         return static_cast<uint64_t>((data.max - data.target) * NanoToMicro);
@@ -210,22 +202,26 @@ namespace Evaluator
       [bucketWidth](std::ostream& stream, uint64_t value, int width)
       {
         auto bucketIndex = GetBucketIndex(value, bucketWidth * NanoToMicro, BucketCount);
-        stream << colors[bucketIndex]; // color
+        stream << BucketColorScheme::GetColor(bucketIndex);
         TableColumn::DefaultFormatter(stream, value, width);
-        stream << resetColor; // reset color
-      }
+        stream << BucketColorScheme::GetResetColor();
+      },
+      "Max Latency"
     });
-    tableMaker.AddColumn(TableColumn{ "Max Index", WideColumnWidth,
+    tableMaker.AddColumn(TableColumn{ "index", TableColumn::DefaultColumnWidth,
       [](ReportData& data)
       {
         return static_cast<uint64_t>(data.maxIndex);
-      }
+      },
+      TableColumn::DefaultFormatter,
+      "Max Latency"
     });
     return tableMaker;
   }
 
   TableMaker::TableMaker()
     : columns()
+    , rowLabelWidth(DefaultRowLabelWidth)
   {
     columns.reserve(10);
   }
@@ -235,23 +231,181 @@ namespace Evaluator
     columns.push_back(std::move(column));
   }
 
+  void TableMaker::OptimizeRowLabelWidth(const std::vector<std::pair<std::string_view, ReportData*>>& reports)
+  {
+    int maxWidth = DefaultRowLabelWidth;
+    for (const auto& [label, _] : reports)
+    {
+      maxWidth = std::max(maxWidth, static_cast<int>(label.length()));
+    }
+    rowLabelWidth = maxWidth;
+  }
+
+  int TableMaker::GetDigitCount(uint64_t value)
+  {
+    if (value == 0) return 1;
+    int count = 0;
+    while (value > 0)
+    {
+      value /= 10;
+      count++;
+    }
+    return count;
+  }
+
+  void TableMaker::OptimizeColumnWidths()
+  {
+    static constexpr int MinimumColumnWidth = 4;
+
+    // Calculate basic widths based on labels
+    for (auto& col : columns)
+    {
+      int labelWidth = static_cast<int>(col.Label.length());
+      col.Width = std::max(labelWidth, MinimumColumnWidth);
+    }
+
+    OptimizeColumnWidthsForCategories();
+  }
+
+  void TableMaker::OptimizeColumnWidthsFromData(const std::vector<std::pair<std::string_view, ReportData*>>& reports)
+  {
+    static constexpr int MinimumColumnWidth = 4;
+
+    // Find the maximum value for each column across all reports
+    for (auto& col : columns)
+    {
+      int maxValueWidth = 0;
+      for (const auto& [_, dataPtr] : reports)
+      {
+        if (dataPtr != nullptr)
+        {
+          uint64_t value = col.ValueGetter(*dataPtr);
+          int valueWidth = GetDigitCount(value);
+          maxValueWidth = std::max(maxValueWidth, valueWidth);
+        }
+      }
+
+      int labelWidth = static_cast<int>(col.Label.length());
+      col.Width = std::max({maxValueWidth, labelWidth, MinimumColumnWidth});
+    }
+
+    OptimizeColumnWidthsForCategories();
+  }
+
+  void TableMaker::OptimizeColumnWidthsForCategories()
+  {
+    static constexpr int SeparatorWidth = 3; // " | "
+
+    // Adjust widths to accommodate category headers
+    for (size_t i = 0; i < columns.size(); )
+    {
+      const auto& col = columns[i];
+      if (!col.Category.empty())
+      {
+        // Find all columns in this category span
+        std::string_view category = col.Category;
+        size_t spanStart = i;
+        size_t spanCount = 0;
+        int totalWidth = 0;
+
+        for (size_t j = i; j < columns.size() && columns[j].Category == category; ++j)
+        {
+          if (spanCount > 0)
+            totalWidth += SeparatorWidth;
+          totalWidth += columns[j].Width;
+          spanCount++;
+        }
+
+        // Check if category name fits
+        int categoryLength = static_cast<int>(category.length());
+        if (spanCount > 0 && totalWidth < categoryLength)
+        {
+          // Need to expand columns to fit category
+          int deficit = categoryLength - totalWidth;
+          int perColumn = deficit / static_cast<int>(spanCount);
+          int remainder = deficit % static_cast<int>(spanCount);
+
+          // Distribute extra width across columns
+          for (size_t j = spanStart; j < spanStart + spanCount; ++j)
+          {
+            columns[j].Width += perColumn;
+            if (remainder > 0)
+            {
+              columns[j].Width++;
+              remainder--;
+            }
+          }
+        }
+
+        i += (spanCount > 0 ? spanCount : 1);
+      }
+      else
+      {
+        i++;
+      }
+    }
+  }
+
   int TableMaker::PrintLabels(std::ostream& stream) const
   {
+    static constexpr int SeparatorWidth = 3; // " | "
+    static constexpr int PaddingAroundValue = 2; // spaces on each side
     int lineCount = 0;
+
+    // First line: Category headers
     stream << BeginRow;
-    stream << std::setfill(' ') << std::setw(RowLabelWidth) << "Label" << Separator;
+    stream << std::setfill(' ') << std::setw(rowLabelWidth) << "" << Separator;
+
+    // Process columns and group by category
+    for (size_t i = 0; i < columns.size(); )
+    {
+      const auto& col = columns[i];
+      if (col.Category.empty())
+      {
+        // Non-categorized column - print spaces
+        stream << std::setw(col.Width) << "" << Separator;
+        i++;
+      }
+      else
+      {
+        // Count how many consecutive columns share this category
+        std::string_view category = col.Category;
+        size_t spanCount = 0;
+        int totalWidth = 0;
+        for (size_t j = i; j < columns.size() && columns[j].Category == category; ++j)
+        {
+          if (spanCount > 0)
+            totalWidth += SeparatorWidth;
+          totalWidth += columns[j].Width;
+          spanCount++;
+        }
+
+        // Center the category label across the spanned columns
+        int padding = (totalWidth - static_cast<int>(category.length())) / 2;
+        stream << std::setw(padding + static_cast<int>(category.length())) << category;
+        stream << std::setw(totalWidth - padding - static_cast<int>(category.length())) << "" << Separator;
+
+        i += spanCount;
+      }
+    }
+    lineCount = AddNewLine(stream, lineCount);
+
+    // Second line: Column labels
+    stream << BeginRow;
+    stream << std::setfill(' ') << std::left << std::setw(rowLabelWidth) << "Label" << std::right << Separator;
     for (const auto& col : columns)
     {
       col.PrintLabel(stream);
       stream << Separator;
     }
     lineCount = AddNewLine(stream, lineCount);
+
+    // Separator line
     stream << '|';
-    stream << std::setfill(Dash) << std::setw(RowLabelWidth + 3) << DashJoint;
+    stream << std::setfill(Dash) << std::setw(rowLabelWidth + SeparatorWidth) << DashJoint;
     for (const auto& col : columns)
     {
-      // Add two for the spaces around the label
-      stream << std::string(col.Width + 2, Dash);
+      stream << std::string(col.Width + PaddingAroundValue, Dash);
       stream << DashJoint;
     }
     lineCount = AddNewLine(stream, lineCount);
@@ -262,7 +416,7 @@ namespace Evaluator
   {
     int lineCount = 0;
     stream << BeginRow;
-    stream << std::setfill(' ') << std::setw(RowLabelWidth) << rowLabel << Separator;
+    stream << std::setfill(' ') << std::left << std::setw(rowLabelWidth) << rowLabel << std::right << Separator;
     for (const auto& col : columns)
     {
       col.PrintValue(data, stream);
@@ -276,6 +430,19 @@ namespace Evaluator
   {
     stream << "\n";
     return count + 1;
+  }
+
+  void TableMaker::PrintMaxLatencySummary(std::ostream& stream, std::string_view label, const ReportData& data) const
+  {
+    uint64_t periodMicros = static_cast<uint64_t>(data.max * NanoToMicro);
+    uint64_t latencyMicros = static_cast<uint64_t>((data.max - data.target) * NanoToMicro);
+    size_t bucketIndex = GetBucketIndex(latencyMicros, bucketWidth * NanoToMicro, BucketCount);
+
+    stream << std::setw(rowLabelWidth) << label << " max period: "
+           << BucketColorScheme::GetColor(bucketIndex) << periodMicros << "µs" << BucketColorScheme::GetResetColor()
+           << " at index " << data.maxIndex << " which is "
+           << BucketColorScheme::GetColor(bucketIndex) << BucketColorScheme::GetCategory(bucketIndex)
+           << BucketColorScheme::GetResetColor() << ".\n";
   }
 
   TimerReport::TimerReport(uint64_t argTarget, uint64_t argBucketWidth, ReportData* argUpload)
